@@ -5,40 +5,238 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Linux Monitor Dashboard</title>
   <style>
-    body { font-family: Arial, sans-serif; margin: 24px; }
-    .grid { display: grid; grid-template-columns: 1fr; gap: 16px; max-width: 900px; }
-    .card { border: 1px solid #ddd; border-radius: 10px; padding: 16px; }
+    :root {
+      color-scheme: light;
+    }
+    body { font-family: Arial, sans-serif; margin: 24px; color: #222; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; max-width: 1100px; }
+    .card { border: 1px solid #ddd; border-radius: 12px; padding: 16px; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
+    .card.alert { border-color: #e74c3c; background: #fff5f5; }
     pre { margin: 0; white-space: pre-wrap; }
-    .top { display:flex; justify-content:space-between; align-items:center; }
+    .top { display:flex; justify-content:space-between; align-items:center; gap: 16px; flex-wrap: wrap; }
     button { padding: 8px 12px; }
-    .hint { color:#666; font-size: 14px; }
+    .hint { color:#666; font-size: 14px; margin-top: 6px; }
+    .status-row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+    .status-msg { font-size: 14px; color: #666; }
+    .status-msg.error { color: #c0392b; }
+    .metric { font-size: 28px; font-weight: 600; }
+    .subtle { color: #666; font-size: 13px; }
+    canvas { width: 100%; height: 120px; margin-top: 8px; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { text-align: left; padding: 6px 4px; border-bottom: 1px solid #eee; }
+    tbody tr { cursor: pointer; }
+    tbody tr:hover { background: #f8f9fb; }
+    .detail-box { background: #f6f7fb; padding: 10px; border-radius: 8px; font-size: 13px; }
   </style>
 </head>
 <body>
   <div class="top">
-    <h2>Linux Monitor Dashboard</h2>
-    <button onclick="loadStatus()">刷新</button>
+    <div>
+      <h2>Linux Monitor Dashboard</h2>
+      <div class="hint">只读展示，支持手动刷新与自动刷新。</div>
+    </div>
+    <div class="status-row">
+      <label>
+        刷新间隔：
+        <select id="refresh-interval">
+          <option value="1">1s</option>
+          <option value="5">5s</option>
+          <option value="10">10s</option>
+          <option value="30">30s</option>
+        </select>
+      </label>
+      <button id="refresh-btn">刷新</button>
+      <div id="status-msg" class="status-msg">准备就绪</div>
+    </div>
   </div>
-  <div class="hint">每 5 秒自动刷新一次（只读展示）。</div>
 
   <div class="grid">
-    <div class="card"><h3>CPU</h3><pre id="cpu">加载中...</pre></div>
-    <div class="card"><h3>Memory</h3><pre id="mem">加载中...</pre></div>
-    <div class="card"><h3>Disk</h3><pre id="disk">加载中...</pre></div>
-    <div class="card"><h3>Process</h3><pre id="proc">加载中...</pre></div>
+    <div class="card" id="cpu-card">
+      <h3>CPU</h3>
+      <div class="metric" id="cpu-usage">--%</div>
+      <div class="subtle" id="cpu-detail">暂无数据</div>
+      <canvas id="cpu-chart"></canvas>
+    </div>
+
+    <div class="card" id="mem-card">
+      <h3>Memory</h3>
+      <div class="metric" id="mem-usage">--%</div>
+      <div class="subtle" id="mem-detail">暂无数据</div>
+      <canvas id="mem-chart"></canvas>
+    </div>
+
+    <div class="card" id="disk-card">
+      <h3>Disk (/)</h3>
+      <div class="metric" id="disk-usage">--%</div>
+      <div class="subtle" id="disk-detail">暂无数据</div>
+      <canvas id="disk-chart"></canvas>
+    </div>
+
+    <div class="card">
+      <h3>Process (Top 5)</h3>
+      <h4>CPU</h4>
+      <table>
+        <thead>
+          <tr><th>PID</th><th>Command</th><th>CPU%</th><th>MEM%</th></tr>
+        </thead>
+        <tbody id="proc-cpu"></tbody>
+      </table>
+      <h4>Memory</h4>
+      <table>
+        <thead>
+          <tr><th>PID</th><th>Command</th><th>CPU%</th><th>MEM%</th></tr>
+        </thead>
+        <tbody id="proc-mem"></tbody>
+      </table>
+      <div class="detail-box" id="proc-detail">点击进程查看详情</div>
+    </div>
   </div>
 
   <script>
-    async function loadStatus() {
-      const res = await fetch("/api/status");
-      const data = await res.json();
-      document.getElementById("cpu").textContent = data.cpu;
-      document.getElementById("mem").textContent = data.mem;
-      document.getElementById("disk").textContent = data.disk;
-      document.getElementById("proc").textContent = data.proc;
+    let refreshTimer = null;
+    let refreshSeconds = 5;
+
+    function setStatusMessage(message, isError = false) {
+      const el = document.getElementById("status-msg");
+      el.textContent = message;
+      el.classList.toggle("error", isError);
     }
-    loadStatus();
-    setInterval(loadStatus, 5000);
+
+    function formatPercent(value) {
+      return value === null || value === undefined ? "--" : `${value.toFixed(1)}%`;
+    }
+
+    function updateCardAlert(cardId, alertOn) {
+      const card = document.getElementById(cardId);
+      if (!card) return;
+      card.classList.toggle("alert", Boolean(alertOn));
+    }
+
+    function drawLine(canvasId, items, key) {
+      const canvas = document.getElementById(canvasId);
+      const ctx = canvas.getContext("2d");
+      const width = canvas.width = canvas.offsetWidth * devicePixelRatio;
+      const height = canvas.height = canvas.offsetHeight * devicePixelRatio;
+      ctx.clearRect(0, 0, width, height);
+      if (!items.length) {
+        ctx.fillStyle = "#999";
+        ctx.fillText("暂无历史数据", 10, 20);
+        return;
+      }
+      const values = items.map(item => item[key]).filter(v => v !== null && v !== undefined);
+      if (!values.length) {
+        ctx.fillStyle = "#999";
+        ctx.fillText("暂无历史数据", 10, 20);
+        return;
+      }
+      const max = Math.max(...values, 100);
+      const min = Math.min(...values, 0);
+      const range = max - min || 1;
+      const stepX = width / Math.max(values.length - 1, 1);
+      ctx.strokeStyle = "#2b7cff";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      values.forEach((value, index) => {
+        const x = index * stepX;
+        const y = height - ((value - min) / range) * (height - 16) - 8;
+        if (index === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+    }
+
+    async function loadHistory() {
+      const res = await fetch("/api/history");
+      const payload = await res.json();
+      const items = payload.items || [];
+      drawLine("cpu-chart", items, "cpu");
+      drawLine("mem-chart", items, "mem");
+      drawLine("disk-chart", items, "disk");
+    }
+
+    function renderProcessRows(rows, containerId) {
+      const container = document.getElementById(containerId);
+      container.innerHTML = "";
+      rows.forEach(row => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td>${row.pid}</td><td>${row.command}</td><td>${row.cpu?.toFixed(1) ?? "--"}</td><td>${row.mem?.toFixed(1) ?? "--"}</td>`;
+        tr.addEventListener("click", () => loadProcessDetail(row.pid));
+        container.appendChild(tr);
+      });
+    }
+
+    async function loadProcessDetail(pid) {
+      const detailBox = document.getElementById("proc-detail");
+      detailBox.textContent = "加载中...";
+      try {
+        const res = await fetch(`/api/process/${pid}`);
+        const data = await res.json();
+        if (!data.ok) {
+          detailBox.textContent = data.error || "无法获取进程详情";
+          return;
+        }
+        detailBox.textContent = `PID: ${data.pid}\nCommand: ${data.command}\nCPU: ${data.cpu}%\nMem: ${data.mem}%\nElapsed: ${data.elapsed}\nUser: ${data.user}\nState: ${data.state}`;
+      } catch (error) {
+        detailBox.textContent = "获取进程详情失败";
+      }
+    }
+
+    async function loadStatus() {
+      setStatusMessage("刷新中...");
+      try {
+        const res = await fetch("/api/status");
+        if (!res.ok) throw new Error("status fetch failed");
+        const data = await res.json();
+        document.getElementById("cpu-usage").textContent = formatPercent(data.cpu.usage);
+        document.getElementById("cpu-detail").textContent = `更新时间: ${data.timestamp}`;
+        updateCardAlert("cpu-card", data.cpu.alert);
+
+        document.getElementById("mem-usage").textContent = formatPercent(data.mem.usage);
+        document.getElementById("mem-detail").textContent = `Used ${data.mem.used_mb ?? "--"} MB / Total ${data.mem.total_mb ?? "--"} MB`;
+        updateCardAlert("mem-card", data.mem.alert);
+
+        document.getElementById("disk-usage").textContent = formatPercent(data.disk.usage);
+        document.getElementById("disk-detail").textContent = `Used ${data.disk.used ?? "--"} / Total ${data.disk.total ?? "--"}`;
+        updateCardAlert("disk-card", data.disk.alert);
+
+        renderProcessRows(data.proc.top_cpu || [], "proc-cpu");
+        renderProcessRows(data.proc.top_mem || [], "proc-mem");
+
+        await loadHistory();
+        setStatusMessage("已更新");
+      } catch (error) {
+        setStatusMessage("刷新失败，请检查后端服务", true);
+      }
+    }
+
+    async function loadConfig() {
+      try {
+        const res = await fetch("/api/config");
+        if (!res.ok) return;
+        const config = await res.json();
+        refreshSeconds = config.refreshSeconds || refreshSeconds;
+        const select = document.getElementById("refresh-interval");
+        select.value = String(refreshSeconds);
+      } catch (error) {
+        // ignore config errors
+      }
+    }
+
+    function resetTimer() {
+      if (refreshTimer) clearInterval(refreshTimer);
+      refreshTimer = setInterval(loadStatus, refreshSeconds * 1000);
+    }
+
+    document.getElementById("refresh-btn").addEventListener("click", loadStatus);
+    document.getElementById("refresh-interval").addEventListener("change", (event) => {
+      refreshSeconds = Number(event.target.value);
+      resetTimer();
+    });
+
+    loadConfig().then(() => {
+      loadStatus();
+      resetTimer();
+    });
   </script>
 </body>
 </html>
