@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Linux Monitor Dashboard</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 24px; }
+    .grid { display: grid; grid-template-columns: 1fr; gap: 16px; max-width: 900px; }
+    .card { border: 1px solid #ddd; border-radius: 10px; padding: 16px; }
+    pre { margin: 0; white-space: pre-wrap; }
+    .top { display:flex; justify-content:space-between; align-items:center; }
+    button { padding: 8px 12px; }
+    .hint { color:#666; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <div class="top">
+    <h2>Linux Monitor Dashboard</h2>
+    <button onclick="loadStatus()">刷新</button>
+  </div>
+  <div class="hint">每 5 秒自动刷新一次（只读展示）。</div>
+
+  <div class="grid">
+    <div class="card"><h3>CPU</h3><pre id="cpu">加载中...</pre></div>
+    <div class="card"><h3>Memory</h3><pre id="mem">加载中...</pre></div>
+    <div class="card"><h3>Disk</h3><pre id="disk">加载中...</pre></div>
+    <div class="card"><h3>Process</h3><pre id="proc">加载中...</pre></div>
+  </div>
+
+  <script>
+    async function loadStatus() {
+      const res = await fetch("/api/status");
+      const data = await res.json();
+      document.getElementById("cpu").textContent = data.cpu;
+      document.getElementById("mem").textContent = data.mem;
+      document.getElementById("disk").textContent = data.disk;
+      document.getElementById("proc").textContent = data.proc;
+    }
+    loadStatus();
+    setInterval(loadStatus, 5000);
+  </script>
+</body>
+</html>
